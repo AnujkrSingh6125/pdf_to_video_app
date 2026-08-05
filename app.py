@@ -46,10 +46,12 @@ def extract_text(file_bytes, filename):
             
     os.remove(tmp_path)
     return text.strip()
-
 def get_script(text, api_key):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('models/gemini-1.5-flash')
+    # Set the client to use the stable v1 API version directly
+    genai.configure(api_key=api_key, client_options={"api_endpoint": "generativelanguage.googleapis.com"})
+    
+    # Use gemini-1.5-flash without 'models/' prefix on the stable interface
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     Divide this document into a 3-scene video explanation script.
