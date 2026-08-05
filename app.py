@@ -14,9 +14,14 @@ from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 # --- STREAMLIT CONFIG & API SETUP ---
 st.set_page_config(page_title="PDF/DOCX to Video Lecture", layout="wide")
 
-api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
+# Fetch API key automatically from Streamlit Secrets or Environment Variables
+api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+
 if api_key:
     genai.configure(api_key=api_key)
+else:
+    st.error("GEMINI_API_KEY is missing. Please configure it in Streamlit Secrets or Environment Variables.")
+    st.stop()
 
 # --- TEXT EXTRACTION HELPER FUNCTIONS ---
 def extract_text_from_pdf(pdf_file):
@@ -125,7 +130,6 @@ def create_text_image(text, width=1280, height=720, bg_color=(24, 28, 36), text_
     if current_line:
         lines.append(' '.join(current_line))
 
-    # Render up to 12 lines on screen to keep text readable
     lines = lines[:12]
 
     line_height = 45
@@ -147,7 +151,7 @@ st.write("Convert long PDF/DOCX documents into comprehensive, classroom-style ex
 
 uploaded_file = st.file_uploader("Upload your lecture document (PDF or DOCX)", type=["pdf", "docx"])
 
-if uploaded_file and api_key:
+if uploaded_file:
     if st.button("Generate Full Lecture Video"):
         with st.spinner("Extracting text from document..."):
             if uploaded_file.name.endswith(".pdf"):
@@ -225,7 +229,7 @@ if uploaded_file and api_key:
         st.success("Lecture video generated successfully!")
         st.video(output_video_path)
 
-        # Cleanup temporary audio/video working files
+        # Cleanup working files
         for clip in video_clips:
             clip.close()
         final_video.close()
@@ -235,6 +239,3 @@ if uploaded_file and api_key:
                     os.remove(tfile)
                 except Exception:
                     pass
-
-elif not api_key:
-    st.warning("Please enter your Gemini API Key in the left sidebar to proceed.")
