@@ -60,6 +60,7 @@ def chunk_text_by_paragraphs(text, max_chars_per_chunk=1500):
     return chunks
 
 # --- GEMINI DETAILED SCRIPT GENERATOR ---
+# --- GEMINI DETAILED SCRIPT GENERATOR ---
 def generate_module_explanation(chunk_text, module_index, total_modules):
     """Generates an exhaustive, unconstrained explanation for a specific section."""
     system_instruction = (
@@ -76,19 +77,37 @@ def generate_module_explanation(chunk_text, module_index, total_modules):
         f"Source Content Excerpt:\n{chunk_text}"
     )
 
-    available_models = ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "gemini-1.5-flash"]
-    
+    # 1. Dynamically fetch models that support content generation
+    available_models = []
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+    except Exception as list_err:
+        st.warning(f"Could not list models dynamically: {list_err}")
+
+    # Fallback list if listing fails
+    if not available_models:
+        available_models = ["gemini-1.5-flash", "gemini-2.0-flash", "models/gemini-1.5-flash"]
+
+    last_error = None
+
+    # 2. Try generating content with available models
     for model_name in available_models:
         try:
-            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+            model = genai.GenerativeModel(
+                model_name=model_name, 
+                system_instruction=system_instruction
+            )
             response = model.generate_content(user_prompt)
             if response and response.text:
                 return response.text.strip()
-        except Exception:
+        except Exception as e:
+            last_error = e
             continue
 
-    raise Exception(f"Failed to generate explanation for Module {module_index}.")
-
+    # 3. Raise the ACTUAL error to help debug
+    raise Exception(f"Failed to generate explanation for Module {module_index}. Last error: {last_error}")
 # --- TTS AUDIO GENERATOR ---
 async def generate_speech(text, output_filename):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
