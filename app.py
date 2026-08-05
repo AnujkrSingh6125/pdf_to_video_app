@@ -47,11 +47,24 @@ def extract_text(file_bytes, filename):
     os.remove(tmp_path)
     return text.strip()
 def get_script(text, api_key):
-    # Set the client to use the stable v1 API version directly
-    genai.configure(api_key=api_key, client_options={"api_endpoint": "generativelanguage.googleapis.com"})
+    genai.configure(api_key=api_key)
     
-    # Use gemini-1.5-flash without 'models/' prefix on the stable interface
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Auto-select the first working Gemini model available for your API key
+    model_name = "gemini-1.5-flash"
+    try:
+        available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+        # Pick gemini-2.0-flash or gemini-1.5-flash if present, else take the first valid model
+        for candidate in ["models/gemini-2.0-flash", "models/gemini-1.5-flash", "models/gemini-1.5-pro"]:
+            if candidate in available_models:
+                model_name = candidate
+                break
+        else:
+            if available_models:
+                model_name = available_models[0]
+    except Exception:
+        model_name = "gemini-1.5-flash-latest"
+
+    model = genai.GenerativeModel(model_name)
     
     prompt = f"""
     Divide this document into a 3-scene video explanation script.
