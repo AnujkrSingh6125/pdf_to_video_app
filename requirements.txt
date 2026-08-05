@@ -1,7 +1,7 @@
 streamlit
+google-genai
 pypdf
 python-docx
-google-genai
 edge-tts
-moviepy
 Pillow
+moviepy==1.0.3
