@@ -11,7 +11,7 @@ import docx
 
 # Video & Audio Generation
 import edge_tts
-from moviepy import TextClip, AudioFileClip, CompositeVideoClip, ColorClip
+from moviepy.editor import TextClip, AudioFileClip, CompositeVideoClip, ColorClip
 
 # =========================================================
 # 1. HELPER FUNCTIONS & GEMINI API CALL
@@ -133,7 +133,7 @@ def create_video(script_data):
         scene_clips.append(composite)
     
     # Concatenate all scene clips together
-    from moviepy import concatenate_videoclips
+    from moviepy.editor import concatenate_videoclips
     final_clip = concatenate_videoclips(scene_clips, method="compose")
     
     output_video_path = os.path.join(temp_dir, "final_explainer.mp4")
