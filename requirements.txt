@@ -3,4 +3,4 @@ streamlit
 pypdf
 python-docx
 edge-tts
-moviepy
+moviepy==1.0.3
