@@ -1,6 +1,6 @@
+google-generativeai>=0.8.3
 streamlit
-moviepy==1.0.3
-edge-tts
 pypdf
 python-docx
-google-generativeai>=0.8.3
+edge-tts
+moviepy
