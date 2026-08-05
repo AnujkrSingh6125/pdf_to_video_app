@@ -47,27 +47,14 @@ def extract_text(file_bytes, filename):
     os.remove(tmp_path)
     return text.strip()
 import time
+import json
+import google.generativeai as genai
 
 def get_script(text, api_key):
     genai.configure(api_key=api_key)
     
-    # Priority list favoring stable free-tier models
-    candidate_models = ["models/gemini-1.5-flash", "models/gemini-1.5-pro", "models/gemini-2.0-flash"]
-    
-    selected_model = None
-    try:
-        available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-        for candidate in candidate_models:
-            if candidate in available_models:
-                selected_model = candidate
-                break
-    except Exception:
-        pass
-
-    if not selected_model:
-        selected_model = "models/gemini-1.5-flash"
-
-    model = genai.GenerativeModel(selected_model)
+    # Directly target gemini-1.5-flash to bypass gemini-2.0 zero-quota limits
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     Divide this document into a 3-scene video explanation script.
@@ -83,7 +70,7 @@ def get_script(text, api_key):
     Content: {text[:4000]}
     """
     
-    # Retry loop with exponential backoff if a 429 occurs
+    # Retry loop in case per-minute rate limits are triggered
     for attempt in range(3):
         try:
             res = model.generate_content(
@@ -93,7 +80,7 @@ def get_script(text, api_key):
             return json.loads(res.text)
         except Exception as e:
             if "429" in str(e) and attempt < 2:
-                time.sleep(12)  # Pause to reset the per-minute quota window
+                time.sleep(15)  # Wait 15 seconds for quota reset
             else:
                 raise e
 def make_slide(scene, img_path):
