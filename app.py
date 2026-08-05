@@ -1,207 +1,176 @@
 import os
+
+# 1. Set ImageMagick binary path BEFORE importing moviepy
 os.environ["IMAGEMAGICK_BINARY"] = "/usr/bin/convert"
 
-import streamlit as st
-from moviepy.editor import TextClip, AudioFileClip, CompositeVideoClip, ColorClip
+# 2. Disable ImageMagick security policy restrictions for text rendering on Linux containers
+os.system("sed -i 's/rights=\"none\" pattern=\"LABEL\"/rights=\"read|write\" pattern=\"LABEL\"/g' /etc/ImageMagick-6/policy.xml 2>/dev/null")
 
-import os
-import json
-import asyncio
-import tempfile
 import streamlit as st
 import google.generativeai as genai
-
-# Document Parsers
-import pypdf
-import docx
-
-# Video & Audio Generation
+import tempfile
+import asyncio
 import edge_tts
+from pypdf import PdfReader
+from docx import Document
 from moviepy.editor import TextClip, AudioFileClip, CompositeVideoClip, ColorClip
 
-# =========================================================
-# 1. HELPER FUNCTIONS & GEMINI API CALL
-# =========================================================
-def get_script(text, api_key):
-    """Generates a structured 3-scene video script using Gemini API with fallback."""
+# -------------------------------------------------------------------
+# Streamlit Page Setup
+# -------------------------------------------------------------------
+st.set_page_config(page_title="PDF to AI Video Explainer", page_icon="🎬", layout="centered")
+
+st.title("🎬 PDF to AI Video Explainer")
+st.write("Upload a PDF or Word document and generate an explainer video instantly!")
+
+# Configure Gemini API Key
+api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+if api_key:
     genai.configure(api_key=api_key)
-    
-    # Valid model endpoints to try
-    models_to_try = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-2.5-flash'
-    ]
-    prompt = f"""
-    You are an expert video creator. Divide this document content into a concise 3-scene video script.
-    Return strictly a JSON array without markdown formatting, using this exact schema:
-    [
-      {{
-        "scene_number": 1,
-        "slide_title": "Title for Scene 1",
-        "bullet_points": ["Key Point 1", "Key Point 2"],
-        "narration": "Voiceover narration script for scene 1."
-      }},
-      {{
-        "scene_number": 2,
-        "slide_title": "Title for Scene 2",
-        "bullet_points": ["Key Point 1", "Key Point 2"],
-        "narration": "Voiceover narration script for scene 2."
-      }},
-      {{
-        "scene_number": 3,
-        "slide_title": "Title for Scene 3",
-        "bullet_points": ["Key Point 1", "Key Point 2"],
-        "narration": "Voiceover narration script for scene 3."
-      }}
-    ]
+else:
+    st.error("Missing Gemini API Key. Please configure `GEMINI_API_KEY` in Streamlit secrets.")
 
-    Document Content:
-    {text[:4000]}
-    """
-
-    res = None
-    last_error = None
-
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name)
-            res = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"}
-            )
-            break
-        except Exception as e:
-            last_error = e
-            continue
-
-    if res is None:
-        raise RuntimeError(f"All model endpoints failed. Last error: {last_error}")
-
-    return json.loads(res.text)
-
-
-def extract_text(uploaded_file):
+# -------------------------------------------------------------------
+# Helper Functions
+# -------------------------------------------------------------------
+def extract_text_from_file(uploaded_file):
     """Extracts raw text from PDF or DOCX files."""
     text = ""
-    file_type = uploaded_file.name.split(".")[-1].lower()
+    file_name = uploaded_file.name.lower()
     
-    if file_type == "pdf":
-        reader = pypdf.PdfReader(uploaded_file)
+    if file_name.endswith(".pdf"):
+        reader = PdfReader(uploaded_file)
         for page in reader.pages:
             extracted = page.extract_text()
             if extracted:
                 text += extracted + "\n"
-    elif file_type in ["docx", "doc"]:
-        doc = docx.Document(uploaded_file)
-        for para in doc.paragraphs:
-            text += para.text + "\n"
+    elif file_name.endswith(".docx"):
+        doc = Document(uploaded_file)
+        for paragraph in doc.paragraphs:
+            text += paragraph.text + "\n"
             
     return text.strip()
 
 
-async def generate_audio(text, output_path):
-    """Generates speech audio from text using edge-tts."""
+def get_script(text):
+    """Generates a 3-scene concise video script using valid Gemini model endpoints."""
+    prompt = (
+        "You are a video producer. Read the following text and summarize key insights into "
+        "a concise video script with EXACTLY 3 short scenes. Separate each scene clearly with "
+        "'SCENE 1:', 'SCENE 2:', and 'SCENE 3:'. Keep each scene under 2 sentences.\n\n"
+        f"Document Content:\n{text}"
+    )
+    
+    # Active and supported Gemini models in order of priority
+    candidate_models = [
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-pro"
+    ]
+    
+    last_error = None
+    for model_name in candidate_models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            last_error = e
+            continue
+            
+    raise Exception(f"All model endpoints failed. Last error: {last_error}")
+
+
+async def generate_audio_edge_tts(text, output_path):
+    """Generates MP3 audio file from text using edge-tts."""
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_path)
 
 
-def create_video(script_data):
-    """Builds an MP4 video file from the generated script JSON."""
-    temp_dir = tempfile.mkdtemp()
-    scene_clips = []
+def create_video_clip(text, duration, size=(1280, 720)):
+    """Creates a stylized background and text video clip using MoviePy."""
+    bg_clip = ColorClip(size=size, color=(20, 24, 33)).set_duration(duration)
     
-    for idx, scene in enumerate(script_data):
-        # 1. Generate TTS Audio
-        audio_path = os.path.join(temp_dir, f"scene_{idx}.mp3")
-        asyncio.run(generate_audio(scene["narration"], audio_path))
-        
-        audio_clip = AudioFileClip(audio_path)
-        duration = audio_clip.duration
-        
-        # 2. Create Background Clip (1280x720 Dark Theme)
-        bg_clip = ColorClip(size=(1280, 720), color=(30, 30, 45), duration=duration)
-        
-        # 3. Create Text Overlay
-        slide_text = f"{scene['slide_title']}\n\n" + "\n".join([f"• {bp}" for bp in scene["bullet_points"]])
-        
-        txt_clip = TextClip(
-            slide_text,
-            fontsize=36,
-            color='white',
-            font='Arial',
-            method='caption',
-            size=(1100, 600)
-        ).set_position('center').set_duration(duration)
-        
-        # 4. Combine Audio + Visuals
-        composite = CompositeVideoClip([bg_clip, txt_clip]).set_audio(audio_clip)
-        scene_clips.append(composite)
+    txt_clip = TextClip(
+        text,
+        fontsize=32,
+        color='white',
+        size=(1000, None),
+        method='caption',
+        font='DejaVu-Sans'
+    ).set_duration(duration).set_position('center')
     
-    # Concatenate all scene clips together
-    from moviepy.editor import concatenate_videoclips
-    final_clip = concatenate_videoclips(scene_clips, method="compose")
-    
-    output_video_path = os.path.join(temp_dir, "final_explainer.mp4")
-    final_clip.write_videofile(
-        output_video_path,
-        fps=24,
-        codec="libx264",
-        audio_codec="aac"
-    )
-    
-    return output_video_path
+    return CompositeVideoClip([bg_clip, txt_clip])
 
-
-# =========================================================
-# 2. STREAMLIT USER INTERFACE
-# =========================================================
-
-st.set_page_config(page_title="PDF to AI Video Explainer", layout="centered")
-
-st.title("📄 PDF to AI Video Explainer")
-st.write("Upload a PDF or Word document and generate an explainer video instantly!")
-
+# -------------------------------------------------------------------
+# Main UI & Workflow
+# -------------------------------------------------------------------
 uploaded_file = st.file_uploader("Upload your document (.pdf or .docx)", type=["pdf", "docx"])
 
-if uploaded_file is not None:
-    if st.button("🚀 Generate Video Explainer"):
-        try:
-            # Check for API Key in Secrets
-            if "GEMINI_API_KEY" not in st.secrets:
-                st.error("Missing GEMINI_API_KEY in Streamlit Secrets. Please configure it in your Streamlit Cloud settings.")
+if uploaded_file and st.button("🚀 Generate Video Explainer"):
+    with st.spinner("Extracting text from document..."):
+        extracted_text = extract_text_from_file(uploaded_file)
+        
+    if not extracted_text:
+        st.error("Could not extract any readable text from the uploaded document.")
+    else:
+        with st.spinner("Generating script using Gemini AI..."):
+            try:
+                script = get_script(extracted_text[:4000]) # Pass up to 4000 chars for processing
+                st.success("Script generated successfully!")
+                with st.expander("View Script"):
+                    st.write(script)
+            except Exception as e:
+                st.error(f"Error during script generation: {e}")
                 st.stop()
                 
-            api_key = st.secrets["GEMINI_API_KEY"]
-            
-            # Step 1: Extract Text
-            with st.spinner("📖 Extracting text from document..."):
-                extracted_text = extract_text(uploaded_file)
-                if not extracted_text:
-                    st.error("Could not extract any readable text from this file.")
-                    st.stop()
-            
-            # Step 2: Generate Script
-            with st.spinner("🧠 Generating script with Gemini AI..."):
-                script_data = get_script(extracted_text, api_key)
-            
-            # Step 3: Render Video
-            with st.spinner("🎬 Generating voiceover and rendering video clips..."):
-                video_file_path = create_video(script_data)
-            
-            st.success("🎉 Video generated successfully!")
-            
-            # Display Video
-            st.video(video_file_path)
-            
-            # Download Button
-            with open(video_file_path, "rb") as file:
-                st.download_button(
-                    label="📥 Download Explainer Video",
-                    data=file,
-                    file_name="explainer_video.mp4",
-                    mime="video/mp4"
+        with st.spinner("Rendering audio and video clips..."):
+            try:
+                # Split script into scenes (basic parsing)
+                raw_scenes = [s.strip() for s in script.split("SCENE") if s.strip()]
+                if len(raw_scenes) < 3:
+                    scenes = [script[:100], script[100:200], script[200:300]]
+                else:
+                    scenes = raw_scenes[:3]
+
+                video_clips = []
+                temp_files = []
+
+                for idx, scene_text in enumerate(scenes):
+                    audio_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                    temp_files.append(audio_tmp.name)
+                    audio_tmp.close()
+
+                    # Run TTS asynchronously
+                    asyncio.run(generate_audio_edge_tts(scene_text, audio_tmp.name))
+                    
+                    audio_clip = AudioFileClip(audio_tmp.name)
+                    duration = max(audio_clip.duration, 3.0)
+                    
+                    video_clip = create_video_clip(scene_text, duration).set_audio(audio_clip)
+                    video_clips.append(video_clip)
+
+                # Combine clips into final video
+                final_clip = CompositeVideoClip([video_clips[0]]) # Start composition
+                from moviepy.editor import concatenate_videoclips
+                final_clip = concatenate_videoclips(video_clips)
+
+                output_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                final_clip.write_videofile(
+                    output_video_path,
+                    fps=24,
+                    codec="libx264",
+                    audio_codec="aac"
                 )
-                
-        except Exception as e:
-            st.error(f"Error during generation: {e}")
+
+                # Clean up video clips from memory
+                final_clip.close()
+                for c in video_clips:
+                    c.close()
+
+                st.success("Video generated successfully!")
+                st.video(output_video_path)
+
+            except Exception as e:
+                st.error(f"Error during video rendering: {e}")
