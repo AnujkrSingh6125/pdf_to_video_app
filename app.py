@@ -46,43 +46,7 @@ def extract_text(file_bytes, filename):
             
     os.remove(tmp_path)
     return text.strip()
-import time
-import json
-import google.generativeai as genai
 
-def get_script(text, api_key):
-    genai.configure(api_key=api_key)
-    
-    # Directly target gemini-1.5-flash to bypass gemini-2.0 zero-quota limits
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    prompt = f"""
-    Divide this document into a 3-scene video explanation script.
-    Return strictly JSON with this schema:
-    [
-      {{
-        "scene_number": 1,
-        "slide_title": "Title Here",
-        "bullet_points": ["Point 1", "Point 2"],
-        "narration": "Voiceover narration script here."
-      }}
-    ]
-    Content: {text[:4000]}
-    """
-    
-    # Retry loop in case per-minute rate limits are triggered
-    for attempt in range(3):
-        try:
-            res = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"}
-            )
-            return json.loads(res.text)
-        except Exception as e:
-            if "429" in str(e) and attempt < 2:
-                time.sleep(15)  # Wait 15 seconds for quota reset
-            else:
-                raise e
 def make_slide(scene, img_path):
     img = Image.new("RGB", (1920, 1080), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
