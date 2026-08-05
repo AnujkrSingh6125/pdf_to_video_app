@@ -8,8 +8,7 @@ import docx
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 # Page Config
 st.set_page_config(page_title="PDF to AI Video Explainer", page_icon="🎬", layout="centered")
@@ -49,7 +48,9 @@ def extract_text(file_bytes, filename):
     return text.strip()
 
 def get_script(text, api_key):
-    client = genai.Client(api_key=api_key)
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
     prompt = f"""
     Divide this document into a 3-scene video explanation script.
     Return strictly JSON with this schema:
@@ -63,13 +64,12 @@ def get_script(text, api_key):
     ]
     Content: {text[:4000]}
     """
-    res = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json")
+    
+    res = model.generate_content(
+        prompt,
+        generation_config={"response_mime_type": "application/json"}
     )
     return json.loads(res.text)
-
 def make_slide(scene, img_path):
     img = Image.new("RGB", (1920, 1080), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
