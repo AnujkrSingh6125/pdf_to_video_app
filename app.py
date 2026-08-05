@@ -9,12 +9,11 @@ from PyPDF2 import PdfReader
 from docx import Document
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
-from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
+from moviepy.editor import AudioFileClip, VideoClip, concatenate_videoclips
 
 # --- STREAMLIT CONFIG & API SETUP ---
-st.set_page_config(page_title="PDF/DOCX to Video Lecture", layout="wide")
+st.set_page_config(page_title="Comprehensive AI Whiteboard Lecture", layout="wide")
 
-# Fetch API key automatically from Streamlit Secrets or Environment Variables
 api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
 
 if api_key:
@@ -23,7 +22,7 @@ else:
     st.error("GEMINI_API_KEY is missing. Please configure it in Streamlit Secrets or Environment Variables.")
     st.stop()
 
-# --- TEXT EXTRACTION HELPER FUNCTIONS ---
+# --- TEXT EXTRACTION & DYNAMIC CHUNKING ---
 def extract_text_from_pdf(pdf_file):
     reader = PdfReader(pdf_file)
     text = ""
@@ -35,93 +34,106 @@ def extract_text_from_pdf(pdf_file):
 
 def extract_text_from_docx(docx_file):
     doc = Document(docx_file)
-    text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-    return text
+    return "\n".join([paragraph.text for paragraph in doc.paragraphs])
 
-# --- GEMINI SCRIPT GENERATOR ---
-def get_script(text):
-    """Generates an extended, lecture-style video script from the uploaded document."""
-    system_instruction = (
-        "You are an engaging University Professor delivering a comprehensive classroom lecture. "
-        "Your tone should be academic, clear, encouraging, and highly explanatory. "
-        "Do not summarize or cut corners. Fully explain every concept, architecture, opcode structure, "
-        "and logical mechanism mentioned in the text with clear real-world examples and step-by-step reasoning."
-    )
+def chunk_text_by_paragraphs(text, max_chars_per_chunk=1500):
+    """
+    Splits text into logical, readable chunks so every portion of the PDF 
+    gets its own dedicated whiteboard module without strict limits.
+    """
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
     
-    user_prompt = (
-        "Analyze the provided document and deliver a long, structured lecture broken down into 8 detailed modules/scenes.\n\n"
-        "Requirements:\n"
-        "- Create EXACTLY 8 distinct scenes.\n"
-        "- For EACH scene, write a long lecture segment (at least 8–12 sentences).\n"
-        "- Dive deep into technical definitions, instruction formats, addressing modes, registers, and operational workflows.\n"
-        "- Speak directly to the students as if teaching in a classroom.\n"
-        "- Format your response strictly like this:\n"
-        "SCENE 1: <Detailed lecture segment 1>\n"
-        "SCENE 2: <Detailed lecture segment 2>\n"
-        "SCENE 3: <Detailed lecture segment 3>\n"
-        "SCENE 4: <Detailed lecture segment 4>\n"
-        "SCENE 5: <Detailed lecture segment 5>\n"
-        "SCENE 6: <Detailed lecture segment 6>\n"
-        "SCENE 7: <Detailed lecture segment 7>\n"
-        "SCENE 8: <Detailed lecture segment 8>\n\n"
-        f"Document Text:\n{text[:15000]}"
+    chunks = []
+    current_chunk = ""
+
+    for p in paragraphs:
+        if len(current_chunk) + len(p) <= max_chars_per_chunk:
+            current_chunk += p + "\n\n"
+        else:
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+            current_chunk = p + "\n\n"
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    return chunks
+
+# --- GEMINI DETAILED SCRIPT GENERATOR ---
+def generate_module_explanation(chunk_text, module_index, total_modules):
+    """Generates an exhaustive, unconstrained explanation for a specific section."""
+    system_instruction = (
+        "You are an expert professor delivering a comprehensive whiteboard lecture. "
+        "Your priority is COMPLETE and THOROUGH explanation. Do not skip any technical details, "
+        "definitions, operations, formulas, or logic present in the text. "
+        "Speak clearly, directly, and naturally to students as if writing on a whiteboard."
     )
 
-    last_error = None
-    try:
-        available_models = [
-            m.name for m in genai.list_models() 
-            if 'generateContent' in m.supported_generation_methods
-        ]
-    except Exception as list_err:
-        available_models = []
-        last_error = list_err
+    user_prompt = (
+        f"This is Module {module_index} of {total_modules} from a detailed course document.\n"
+        "Explain ALL key concepts, mechanisms, and terms in this excerpt thoroughly.\n"
+        "Do NOT summarize loosely or leave out details. Provide a rich, step-by-step lecture commentary.\n\n"
+        f"Source Content Excerpt:\n{chunk_text}"
+    )
 
-    if not available_models:
-        available_models = ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "gemini-1.5-flash"]
-
+    available_models = ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "gemini-1.5-flash"]
+    
     for model_name in available_models:
         try:
-            model = genai.GenerativeModel(
-                model_name,
-                system_instruction=system_instruction
-            )
+            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
             response = model.generate_content(user_prompt)
             if response and response.text:
                 return response.text.strip()
-        except Exception as e:
-            last_error = e
+        except Exception:
             continue
-            
-    raise Exception(f"All model endpoints failed. Last error: {last_error}")
 
-# --- AUDIO GENERATION HELPER ---
+    raise Exception(f"Failed to generate explanation for Module {module_index}.")
+
+# --- TTS AUDIO GENERATOR ---
 async def generate_speech(text, output_filename):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_filename)
 
-# --- PILLOW FRAME GENERATOR ---
-def create_text_image(text, width=1280, height=720, bg_color=(24, 28, 36), text_color=(240, 240, 240)):
+# --- WHITEBOARD ANIMATED FRAME GENERATOR ---
+def render_whiteboard_frame(full_text, progress_ratio, width=1280, height=720, module_num=1, total_modules=1):
+    bg_color = (250, 250, 248)
     image = Image.new("RGB", (width, height), color=bg_color)
     draw = ImageDraw.Draw(image)
 
-    try:
-        font = ImageFont.truetype("DejaVuSans.ttf", 30)
-    except IOError:
-        font = ImageFont.load_default()
+    # Whiteboard grid line background
+    grid_size = 40
+    grid_color = (230, 233, 238)
+    for x in range(0, width, grid_size):
+        draw.line([(x, 0), (x, height)], fill=grid_color, width=1)
+    for y in range(0, height, grid_size):
+        draw.line([(0, y), (width, y)], fill=grid_color, width=1)
 
-    margin = 100
+    try:
+        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
+        font_text = ImageFont.truetype("DejaVuSans.ttf", 26)
+    except IOError:
+        font_title = ImageFont.load_default()
+        font_text = ImageFont.load_default()
+
+    # Header Bar showing current section progression
+    draw.rectangle([(60, 35), (width - 60, 95)], fill=(30, 41, 59))
+    draw.text((80, 48), f"MODULE {module_num} OF {total_modules}", fill=(255, 255, 255), font=font_title)
+
+    # Animated handwriting character cutoff
+    words = full_text.split()
+    total_chars = len(full_text)
+    visible_chars = int(total_chars * progress_ratio)
+
+    # Word wrapping logic
+    margin = 80
     max_width = width - (margin * 2)
-    
-    words = text.split()
     lines = []
     current_line = []
-    
+
     for word in words:
         test_line = ' '.join(current_line + [word])
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        text_w = bbox[2] - bbox[0]
-        if text_w <= max_width:
+        bbox = draw.textbbox((0, 0), test_line, font=font_text)
+        if (bbox[2] - bbox[0]) <= max_width:
             current_line.append(word)
         else:
             if current_line:
@@ -130,106 +142,105 @@ def create_text_image(text, width=1280, height=720, bg_color=(24, 28, 36), text_
     if current_line:
         lines.append(' '.join(current_line))
 
-    lines = lines[:12]
+    # Render animated lines onto whiteboard
+    y = 145
+    line_height = 42
+    char_counter = 0
 
-    line_height = 45
-    total_text_height = len(lines) * line_height
-    y = (height - total_text_height) // 2
+    marker_blue = (15, 23, 42)
+    accent_red = (225, 29, 72)
+    accent_blue = (37, 99, 235)
 
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        text_w = bbox[2] - bbox[0]
-        x = (width - text_w) // 2
-        draw.text((x, y), line, fill=text_color, font=font)
+    for line in lines[:11]:
+        line_length = len(line)
+        if char_counter >= visible_chars:
+            break
+
+        revealed_in_line = max(0, visible_chars - char_counter)
+        visible_line = line[:revealed_in_line]
+
+        if visible_line:
+            draw.ellipse([(margin - 25, y + 10), (margin - 13, y + 22)], fill=accent_blue)
+            draw.text((margin, y), visible_line, fill=marker_blue, font=font_text)
+
+            if revealed_in_line == line_length and (lines.index(line) % 3 == 0):
+                bbox = draw.textbbox((margin, y), visible_line, font=font_text)
+                draw.line([(margin, bbox[3] + 2), (bbox[2], bbox[3] + 2)], fill=accent_red, width=3)
+
+        char_counter += line_length + 1
         y += line_height
 
     return np.array(image)
 
-# --- STREAMLIT USER INTERFACE ---
-st.title("🎓 AI Lecture Video Generator")
-st.write("Convert long PDF/DOCX documents into comprehensive, classroom-style explainer videos.")
+# --- STREAMLIT UI ---
+st.title("📚 Full-Coverage AI Whiteboard Lecture Generator")
+st.write("Generates unconstrained, fully comprehensive whiteboard videos covering every section of your document.")
 
-uploaded_file = st.file_uploader("Upload your lecture document (PDF or DOCX)", type=["pdf", "docx"])
+uploaded_file = st.file_uploader("Upload Document (PDF or DOCX)", type=["pdf", "docx"])
 
 if uploaded_file:
-    if st.button("Generate Full Lecture Video"):
-        with st.spinner("Extracting text from document..."):
+    if st.button("Generate Complete Lecture"):
+        with st.spinner("Extracting document contents..."):
             if uploaded_file.name.endswith(".pdf"):
                 extracted_text = extract_text_from_pdf(uploaded_file)
             else:
                 extracted_text = extract_text_from_docx(uploaded_file)
 
         if not extracted_text.strip():
-            st.error("Could not extract any text from the uploaded file.")
+            st.error("No text could be extracted.")
             st.stop()
 
-        st.info(f"Extracted {len(extracted_text)} characters. Generating professor script...")
+        # Split document dynamically into logical sections
+        text_chunks = chunk_text_by_paragraphs(extracted_text)
+        total_chunks = len(text_chunks)
+        st.success(f"Extracted {len(extracted_text)} characters. Segmented into {total_chunks} detailed modules for full coverage.")
 
-        # 1. Script Generation
-        with st.spinner("Professor AI is drafting an 8-scene detailed lecture script..."):
-            try:
-                raw_script = get_script(extracted_text)
-                with st.expander("View Full Lecture Script"):
-                    st.write(raw_script)
-            except Exception as e:
-                st.error(f"Error generating script: {e}")
-                st.stop()
-
-        # 2. Scene Parsing
-        raw_scenes = re.split(r'SCENE\s*\d+:', raw_script, flags=re.IGNORECASE)
-        scenes = [s.strip() for s in raw_scenes if s.strip()]
-
-        if len(scenes) < 8:
-            paragraphs = [p.strip() for p in raw_script.split('\n\n') if len(p.strip()) > 50]
-            scenes = paragraphs[:8]
-
-        scenes = scenes[:8]
-        st.write(f"Parsed {len(scenes)} lecture modules for video rendering.")
-
-        # 3. Video & Audio Assembly
         video_clips = []
         temp_files = []
-
         progress_bar = st.progress(0)
 
-        for idx, scene_text in enumerate(scenes):
-            st.text(f"Rendering Module {idx+1}/{len(scenes)}...")
+        for idx, chunk in enumerate(text_chunks):
+            mod_num = idx + 1
+            st.text(f"Processing Module {mod_num}/{total_chunks}...")
 
-            # Generate TTS Audio
+            # 1. Generate thorough script section
+            explanation_script = generate_module_explanation(chunk, mod_num, total_chunks)
+
+            # 2. Synthesize audio voiceover
             audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
             temp_files.append(audio_path)
-            asyncio.run(generate_speech(scene_text, audio_path))
+            asyncio.run(generate_speech(explanation_script, audio_path))
 
-            # Load Audio and compute duration
             audio_clip = AudioFileClip(audio_path)
             duration = audio_clip.duration
 
-            # Render Pillow Image Frame
-            img_np = create_text_image(scene_text)
-            
-            # Create MoviePy Video Clip matched to audio duration
-            clip = ImageClip(img_np).set_duration(duration).set_audio(audio_clip)
+            # 3. Create animated whiteboard video clip
+            def make_frame(t, text=explanation_script, dur=duration, m_num=mod_num, t_num=total_chunks):
+                progress = min(1.0, max(0.0, t / dur))
+                return render_whiteboard_frame(text, progress_ratio=progress, module_num=m_num, total_modules=t_num)
+
+            clip = VideoClip(make_frame, duration=duration).set_audio(audio_clip)
             video_clips.append(clip)
 
-            progress_bar.progress((idx + 1) / len(scenes))
+            progress_bar.progress((idx + 1) / total_chunks)
 
-        # 4. Final Video Concatenation
-        with st.spinner("Stitching video scenes together into final lecture MP4..."):
+        # 4. Concatenate all dynamic modules into final video
+        with st.spinner("Stitching all module clips into complete video..."):
             final_video = concatenate_videoclips(video_clips, method="compose")
             output_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
             temp_files.append(output_video_path)
-            
+
             final_video.write_videofile(
-                output_video_path, 
-                fps=24, 
-                codec="libx264", 
+                output_video_path,
+                fps=24,
+                codec="libx264",
                 audio_codec="aac"
             )
 
-        st.success("Lecture video generated successfully!")
+        st.success("Complete whiteboard lecture generated successfully!")
         st.video(output_video_path)
 
-        # Cleanup working files
+        # Cleanup intermediate temporary files
         for clip in video_clips:
             clip.close()
         final_video.close()
