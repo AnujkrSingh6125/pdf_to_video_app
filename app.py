@@ -4,7 +4,8 @@ import tempfile
 import subprocess
 import concurrent.futures
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import edge_tts
 from PyPDF2 import PdfReader
 from docx import Document
@@ -15,11 +16,12 @@ st.set_page_config(page_title="Ultra-Fast AI Lecture Generator", layout="wide")
 
 api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
 
-if api_key:
-    genai.configure(api_key=api_key)
-else:
+if not api_key:
     st.error("GEMINI_API_KEY is missing. Please configure it in Streamlit Secrets.")
     st.stop()
+
+# Initialize unified Google GenAI Client
+client = genai.Client(api_key=api_key)
 
 # --- TEXT EXTRACTION & VALIDATION ---
 def extract_text_from_pdf(pdf_file):
@@ -34,7 +36,7 @@ def extract_text_from_pdf(pdf_file):
     if not text:
         raise ValueError(
             "No selectable text found in this PDF. If it is a scanned document or image, "
-            "please convert it using OCR or use a text-based PDF/DOCX file."
+            "please run OCR on it or use a text-based PDF/DOCX file."
         )
     return text
 
@@ -42,7 +44,7 @@ def extract_text_from_docx(docx_file):
     doc = Document(docx_file)
     text = "\n".join([paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip()])
     if not text.strip():
-        raise ValueError("The uploaded DOCX file is empty.")
+        raise ValueError("The uploaded DOCX file contains no readable text.")
     return text
 
 def chunk_text_by_paragraphs(text, max_chars_per_chunk=4000):
@@ -80,17 +82,19 @@ def generate_module_explanation(chunk_text, module_index, total_modules):
         f"Source Content Excerpt:\n{chunk_text}"
     )
 
-    candidate_models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-    
+    candidate_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
+
     last_exception = None
     for model_name in candidate_models:
         try:
-            model = genai.GenerativeModel(
-                model_name=model_name, 
-                system_instruction=system_instruction
+            response = client.models.generate_content(
+                model=model_name,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction
+                )
             )
-            response = model.generate_content(user_prompt)
-            if response and hasattr(response, 'text') and response.text:
+            if response and response.text:
                 return response.text.strip()
         except Exception as e:
             last_exception = e
@@ -115,7 +119,7 @@ def create_whiteboard_slide(text, module_num, total_modules, width=960, height=5
     for x in range(0, width, grid_size):
         draw.line([(x, 0), (x, height)], fill=grid_color, width=1)
     for y in range(0, height, grid_size):
-        draw.line([(0, y), (width, y)], fill=grid_color, width=1)
+        draw.line([(0, y)], (width, y), fill=grid_color, width=1)
 
     try:
         font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
