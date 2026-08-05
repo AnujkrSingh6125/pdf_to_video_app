@@ -49,7 +49,7 @@ def extract_text(file_bytes, filename):
 
 def get_script(text, api_key):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('models/gemini-1.5-flash')
     
     prompt = f"""
     Divide this document into a 3-scene video explanation script.
