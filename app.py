@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 import tempfile
 import subprocess
@@ -12,7 +13,7 @@ from docx import Document
 from PIL import Image, ImageDraw, ImageFont
 
 # --- STREAMLIT CONFIG & API SETUP ---
-st.set_page_config(page_title="Ultra-Fast AI Lecture Generator", layout="wide")
+st.set_page_config(page_title="Ultra-Fast AI Whiteboard Lecture Generator", layout="wide")
 
 api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
 
@@ -65,7 +66,7 @@ def chunk_text_by_paragraphs(text, max_chars_per_chunk=4000):
 
     return chunks
 
-# --- GEMINI SCRIPT GENERATOR ---
+# --- GEMINI SCRIPT GENERATOR WITH RETRY & BACKOFF ---
 def generate_module_explanation(chunk_text, module_index, total_modules):
     if not chunk_text or len(chunk_text.strip()) < 10:
         raise ValueError("Extracted text chunk is empty or too short.")
@@ -82,23 +83,29 @@ def generate_module_explanation(chunk_text, module_index, total_modules):
         f"Source Content Excerpt:\n{chunk_text}"
     )
 
-    candidate_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
+    # Prioritize 1.5-flash for higher free tier rate limits, followed by 2.5-flash / 1.5-pro
+    candidate_models = ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"]
 
     last_exception = None
     for model_name in candidate_models:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction
+        for attempt in range(3):  # Retry loop with exponential backoff for 429 limits
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction
+                    )
                 )
-            )
-            if response and response.text:
-                return response.text.strip()
-        except Exception as e:
-            last_exception = e
-            continue
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as e:
+                last_exception = e
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    time.sleep(5 * (attempt + 1))
+                else:
+                    break
 
     raise RuntimeError(f"Gemini API error on Module {module_index}: {last_exception}")
 
@@ -119,7 +126,7 @@ def create_whiteboard_slide(text, module_num, total_modules, width=960, height=5
     for x in range(0, width, grid_size):
         draw.line([(x, 0), (x, height)], fill=grid_color, width=1)
     for y in range(0, height, grid_size):
-        draw.line([(0, y)], (width, y), fill=grid_color, width=1)
+        draw.line([(0, y), (width, y)], fill=grid_color, width=1)
 
     try:
         font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
