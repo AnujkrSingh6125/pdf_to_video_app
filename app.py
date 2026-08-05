@@ -1,4 +1,10 @@
 import os
+os.environ["IMAGEMAGICK_BINARY"] = "/usr/bin/convert"
+
+import streamlit as st
+from moviepy.editor import TextClip, AudioFileClip, CompositeVideoClip, ColorClip
+
+import os
 import json
 import asyncio
 import tempfile
