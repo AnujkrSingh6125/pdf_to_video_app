@@ -23,9 +23,9 @@ def get_script(text, api_key):
     # Valid model endpoints to try
     models_to_try = [
         'gemini-1.5-flash',
-        'gemini-1.5-pro'
+        'gemini-1.5-pro',
+        'gemini-2.5-flash'
     ]
-    
     prompt = f"""
     You are an expert video creator. Divide this document content into a concise 3-scene video script.
     Return strictly a JSON array without markdown formatting, using this exact schema:
