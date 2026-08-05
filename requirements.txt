@@ -1,8 +1,6 @@
-streamlit
-google-generativeai
+google-genai
 edge-tts
-Pillow
-moviepy==1.0.3
-numpy
 PyPDF2
 python-docx
+Pillow
+streamlit
