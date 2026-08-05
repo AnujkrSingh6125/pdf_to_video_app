@@ -1,0 +1,7 @@
+streamlit
+pypdf
+python-docx
+google-genai
+edge-tts
+moviepy
+Pillow
