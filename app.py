@@ -16,7 +16,63 @@ from moviepy.editor import TextClip, AudioFileClip, CompositeVideoClip, ColorCli
 # =========================================================
 # 1. HELPER FUNCTIONS & GEMINI API CALL
 # =========================================================
+def get_script(text, api_key):
+    genai.configure(api_key=api_key)
+    
+    # List of models to attempt dynamically
+    models_to_try = [
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash',
+        'gemini-2.5-flash'
+    ]
+    
+    prompt = f"""
+    You are an expert video creator. Divide this document content into a concise 3-scene video script.
+    Return strictly a JSON array without markdown formatting, using this exact schema:
+    [
+      {{
+        "scene_number": 1,
+        "slide_title": "Title for Scene 1",
+        "bullet_points": ["Key Point 1", "Key Point 2"],
+        "narration": "Voiceover narration script for scene 1."
+      }},
+      {{
+        "scene_number": 2,
+        "slide_title": "Title for Scene 2",
+        "bullet_points": ["Key Point 1", "Key Point 2"],
+        "narration": "Voiceover narration script for scene 2."
+      }},
+      {{
+        "scene_number": 3,
+        "slide_title": "Title for Scene 3",
+        "bullet_points": ["Key Point 1", "Key Point 2"],
+        "narration": "Voiceover narration script for scene 3."
+      }}
+    ]
 
+    Document Content:
+    {text[:4000]}
+    """
+
+    res = None
+    last_error = None
+
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            res = model.generate_content(
+                prompt,
+                generation_config={"response_mime_type": "application/json"}
+            )
+            break
+        except Exception as e:
+            last_error = e
+            continue
+
+    if res is None:
+        raise RuntimeError(f"All model endpoints failed. Last error: {last_error}")
+
+    return json.loads(res.text)
 def extract_text(uploaded_file):
     """Extracts raw text from PDF or DOCX files."""
     text = ""
