@@ -64,7 +64,7 @@ def get_script(text, api_key):
     Content: {text[:4000]}
     """
     res = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-1.5-flash',,
         contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json")
     )
