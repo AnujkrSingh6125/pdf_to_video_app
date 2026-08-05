@@ -66,7 +66,7 @@ def chunk_text_by_paragraphs(text, max_chars_per_chunk=4000):
 
     return chunks
 
-# --- GEMINI SCRIPT GENERATOR WITH RETRY & BACKOFF ---
+# --- GEMINI SCRIPT GENERATOR WITH UPDATED MODEL IDS & RETRY ---
 def generate_module_explanation(chunk_text, module_index, total_modules):
     if not chunk_text or len(chunk_text.strip()) < 10:
         raise ValueError("Extracted text chunk is empty or too short.")
@@ -83,8 +83,8 @@ def generate_module_explanation(chunk_text, module_index, total_modules):
         f"Source Content Excerpt:\n{chunk_text}"
     )
 
-    # Prioritize 1.5-flash for higher free tier rate limits, followed by 2.5-flash / 1.5-pro
-    candidate_models = ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"]
+    # Updated active model list for current API endpoints
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
     last_exception = None
     for model_name in candidate_models:
@@ -105,7 +105,7 @@ def generate_module_explanation(chunk_text, module_index, total_modules):
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                     time.sleep(5 * (attempt + 1))
                 else:
-                    break
+                    break  # If model is 404/not supported, failover immediately to next candidate
 
     raise RuntimeError(f"Gemini API error on Module {module_index}: {last_exception}")
 
