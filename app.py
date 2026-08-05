@@ -1,10 +1,8 @@
 import os
 
-# 1. Set ImageMagick binary path BEFORE importing moviepy
-os.environ["IMAGEMAGICK_BINARY"] = "/usr/bin/convert"
-
-# 2. Disable ImageMagick security policy restrictions for text rendering on Linux containers
-os.system("sed -i 's/rights=\"none\" pattern=\"LABEL\"/rights=\"read|write\" pattern=\"LABEL\"/g' /etc/ImageMagick-6/policy.xml 2>/dev/null")
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+from moviepy.editor import AudioFileClip, CompositeVideoClip, ImageClip
 
 import streamlit as st
 import google.generativeai as genai
@@ -97,19 +95,39 @@ async def generate_audio_edge_tts(text, output_path):
 
 
 def create_video_clip(text, duration, size=(1280, 720)):
-    """Creates a stylized background and text video clip using MoviePy."""
-    bg_clip = ColorClip(size=size, color=(20, 24, 33)).set_duration(duration)
+    """Creates a video clip by rendering text onto an image using PIL (no ImageMagick required)."""
+    width, height = size
     
-    txt_clip = TextClip(
-        text,
-        fontsize=32,
-        color='white',
-        size=(1000, None),
-        method='caption',
-        font='DejaVu-Sans'
-    ).set_duration(duration).set_position('center')
+    # Create dark background image
+    img = Image.new('RGB', (width, height), color=(20, 24, 33))
+    draw = ImageDraw.Draw(img)
     
-    return CompositeVideoClip([bg_clip, txt_clip])
+    # Try using default system font or load built-in PIL font
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 36)
+    except IOError:
+        font = ImageFont.load_default()
+
+    # Wrap text cleanly across lines
+    import textwrap
+    wrapped_text = textwrap.fill(text, width=45)
+
+    # Calculate text position (center of image)
+    bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align="center")
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    x = (width - text_width) // 2
+    y = (height - text_height) // 2
+
+    # Draw centered white text
+    draw.multiline_text((x, y), wrapped_text, fill=(255, 255, 255), font=font, align="center")
+
+    # Convert PIL Image to Numpy array and then to MoviePy ImageClip
+    img_np = np.array(img)
+    clip = ImageClip(img_np).set_duration(duration)
+    
+    return clip
 
 # -------------------------------------------------------------------
 # Main UI & Workflow
