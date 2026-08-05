@@ -46,25 +46,28 @@ def extract_text(file_bytes, filename):
             
     os.remove(tmp_path)
     return text.strip()
+import time
+
 def get_script(text, api_key):
     genai.configure(api_key=api_key)
     
-    # Auto-select the first working Gemini model available for your API key
-    model_name = "gemini-1.5-flash"
+    # Priority list favoring stable free-tier models
+    candidate_models = ["models/gemini-1.5-flash", "models/gemini-1.5-pro", "models/gemini-2.0-flash"]
+    
+    selected_model = None
     try:
         available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-        # Pick gemini-2.0-flash or gemini-1.5-flash if present, else take the first valid model
-        for candidate in ["models/gemini-2.0-flash", "models/gemini-1.5-flash", "models/gemini-1.5-pro"]:
+        for candidate in candidate_models:
             if candidate in available_models:
-                model_name = candidate
+                selected_model = candidate
                 break
-        else:
-            if available_models:
-                model_name = available_models[0]
     except Exception:
-        model_name = "gemini-1.5-flash-latest"
+        pass
 
-    model = genai.GenerativeModel(model_name)
+    if not selected_model:
+        selected_model = "models/gemini-1.5-flash"
+
+    model = genai.GenerativeModel(selected_model)
     
     prompt = f"""
     Divide this document into a 3-scene video explanation script.
@@ -80,11 +83,19 @@ def get_script(text, api_key):
     Content: {text[:4000]}
     """
     
-    res = model.generate_content(
-        prompt,
-        generation_config={"response_mime_type": "application/json"}
-    )
-    return json.loads(res.text)
+    # Retry loop with exponential backoff if a 429 occurs
+    for attempt in range(3):
+        try:
+            res = model.generate_content(
+                prompt,
+                generation_config={"response_mime_type": "application/json"}
+            )
+            return json.loads(res.text)
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                time.sleep(12)  # Pause to reset the per-minute quota window
+            else:
+                raise e
 def make_slide(scene, img_path):
     img = Image.new("RGB", (1920, 1080), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
