@@ -17,13 +17,13 @@ from moviepy.editor import TextClip, AudioFileClip, CompositeVideoClip, ColorCli
 # 1. HELPER FUNCTIONS & GEMINI API CALL
 # =========================================================
 def get_script(text, api_key):
+    """Generates a structured 3-scene video script using Gemini API with fallback."""
     genai.configure(api_key=api_key)
     
-    # List of models to attempt dynamically
+    # Valid model endpoints to try
     models_to_try = [
-        'gemini-1.5-flash-latest',
         'gemini-1.5-flash',
-        'gemini-2.5-flash'
+        'gemini-1.5-pro'
     ]
     
     prompt = f"""
@@ -73,6 +73,8 @@ def get_script(text, api_key):
         raise RuntimeError(f"All model endpoints failed. Last error: {last_error}")
 
     return json.loads(res.text)
+
+
 def extract_text(uploaded_file):
     """Extracts raw text from PDF or DOCX files."""
     text = ""
@@ -92,48 +94,6 @@ def extract_text(uploaded_file):
     return text.strip()
 
 
-def get_script(text, api_key):
-    """Generates a structured 3-scene video script using Gemini API."""
-    genai.configure(api_key=api_key)
-    
-    # Using the standard gemini-1.5-flash model
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    prompt = f"""
-    You are an expert video creator. Divide this document content into a concise 3-scene video script.
-    Return strictly a JSON array without markdown formatting, using this exact schema:
-    [
-      {{
-        "scene_number": 1,
-        "slide_title": "Title for Scene 1",
-        "bullet_points": ["Key Point 1", "Key Point 2"],
-        "narration": "Voiceover narration script for scene 1."
-      }},
-      {{
-        "scene_number": 2,
-        "slide_title": "Title for Scene 2",
-        "bullet_points": ["Key Point 1", "Key Point 2"],
-        "narration": "Voiceover narration script for scene 2."
-      }},
-      {{
-        "scene_number": 3,
-        "slide_title": "Title for Scene 3",
-        "bullet_points": ["Key Point 1", "Key Point 2"],
-        "narration": "Voiceover narration script for scene 3."
-      }}
-    ]
-
-    Document Content:
-    {text[:4000]}
-    """
-    
-    res = model.generate_content(
-        prompt,
-        generation_config={"response_mime_type": "application/json"}
-    )
-    return json.loads(res.text)
-
-
 async def generate_audio(text, output_path):
     """Generates speech audio from text using edge-tts."""
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
@@ -141,7 +101,7 @@ async def generate_audio(text, output_path):
 
 
 def create_video(script_data):
-    """Builds a MP4 video file from the generated script JSON."""
+    """Builds an MP4 video file from the generated script JSON."""
     temp_dir = tempfile.mkdtemp()
     scene_clips = []
     
