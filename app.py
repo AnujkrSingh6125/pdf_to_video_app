@@ -21,7 +21,7 @@ else:
     st.error("GEMINI_API_KEY is missing. Please configure it in Streamlit Secrets.")
     st.stop()
 
-# --- TEXT EXTRACTION & CHUNKING ---
+# --- TEXT EXTRACTION & VALIDATION ---
 def extract_text_from_pdf(pdf_file):
     reader = PdfReader(pdf_file)
     text = ""
@@ -29,11 +29,21 @@ def extract_text_from_pdf(pdf_file):
         extracted = page.extract_text()
         if extracted:
             text += extracted + "\n"
+    
+    text = text.strip()
+    if not text:
+        raise ValueError(
+            "No selectable text found in this PDF. If it is a scanned document or image, "
+            "please convert it using OCR or use a text-based PDF/DOCX file."
+        )
     return text
 
 def extract_text_from_docx(docx_file):
     doc = Document(docx_file)
-    return "\n".join([paragraph.text for paragraph in doc.paragraphs])
+    text = "\n".join([paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip()])
+    if not text.strip():
+        raise ValueError("The uploaded DOCX file is empty.")
+    return text
 
 def chunk_text_by_paragraphs(text, max_chars_per_chunk=4000):
     paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
@@ -55,6 +65,9 @@ def chunk_text_by_paragraphs(text, max_chars_per_chunk=4000):
 
 # --- GEMINI SCRIPT GENERATOR ---
 def generate_module_explanation(chunk_text, module_index, total_modules):
+    if not chunk_text or len(chunk_text.strip()) < 10:
+        raise ValueError("Extracted text chunk is empty or too short.")
+
     system_instruction = (
         "You are an expert professor delivering a comprehensive whiteboard lecture. "
         "Your priority is COMPLETE and THOROUGH explanation. Do not skip technical details, "
@@ -67,18 +80,23 @@ def generate_module_explanation(chunk_text, module_index, total_modules):
         f"Source Content Excerpt:\n{chunk_text}"
     )
 
-    available_models = ["gemini-1.5-flash", "models/gemini-1.5-flash", "gemini-2.0-flash"]
+    candidate_models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
     
-    for model_name in available_models:
+    last_exception = None
+    for model_name in candidate_models:
         try:
-            model = genai.GenerativeModel(model_name=model_name, system_instruction=system_instruction)
+            model = genai.GenerativeModel(
+                model_name=model_name, 
+                system_instruction=system_instruction
+            )
             response = model.generate_content(user_prompt)
-            if response and response.text:
+            if response and hasattr(response, 'text') and response.text:
                 return response.text.strip()
-        except Exception:
+        except Exception as e:
+            last_exception = e
             continue
 
-    raise Exception(f"Failed to generate script for Module {module_index}.")
+    raise RuntimeError(f"Gemini API error on Module {module_index}: {last_exception}")
 
 # --- TTS AUDIO GENERATOR ---
 async def generate_speech(text, output_filename):
@@ -110,7 +128,7 @@ def create_whiteboard_slide(text, module_num, total_modules, width=960, height=5
     draw.rectangle([(40, 20), (width - 40, 65)], fill=(30, 41, 59))
     draw.text((55, 30), f"MODULE {module_num} OF {total_modules}", fill=(255, 255, 255), font=font_title)
 
-    # Wrap Text
+    # Word Wrapping
     words = text.split()
     margin = 50
     max_w = width - (margin * 2)
@@ -129,7 +147,7 @@ def create_whiteboard_slide(text, module_num, total_modules, width=960, height=5
     if curr:
         lines.append(' '.join(curr))
 
-    # Text Content
+    # Draw Bullet Points
     y = 90
     line_h = 30
     marker_color = (15, 23, 42)
@@ -144,13 +162,8 @@ def create_whiteboard_slide(text, module_num, total_modules, width=960, height=5
     image.save(img_path)
     return img_path
 
-# --- DIRECT FFMPEG ENGINE ---
+# --- DIRECT FFMPEG PROCESSING ---
 def render_single_module_video(image_path, audio_path, output_mp4):
-    """
-    Executes raw FFmpeg directly with optimized flags:
-    -tune stillimage: compresses static slides instantaneously.
-    -c:a copy: transfers original AAC/MP3 audio without re-encoding.
-    """
     cmd = [
         "ffmpeg", "-y",
         "-loop", "1",
@@ -167,9 +180,6 @@ def render_single_module_video(image_path, audio_path, output_mp4):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 def concatenate_videos_fast(video_paths, output_mp4):
-    """
-    Merges all module videos in milliseconds without re-encoding streams.
-    """
     list_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt')
     for path in video_paths:
         list_file.write(f"file '{path}'\n")
@@ -186,91 +196,91 @@ def concatenate_videos_fast(video_paths, output_mp4):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     os.remove(list_file.name)
 
-# --- WORKFLOW PIPELINE FOR SINGLE MODULE ---
+# --- MODULE EXECUTION PIPELINE ---
 def process_module(idx, chunk, total_chunks):
     mod_num = idx + 1
 
-    # 1. Generate Script
+    # 1. Script Generation
     script = generate_module_explanation(chunk, mod_num, total_chunks)
 
-    # 2. TTS Audio
+    # 2. Audio Generation
     audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
     asyncio.run(generate_speech(script, audio_path))
 
-    # 3. Create Slide Image
+    # 3. Slide Frame Render
     img_path = create_whiteboard_slide(script, mod_num, total_chunks)
 
-    # 4. Render Video Segment via Direct FFmpeg
+    # 4. Direct FFmpeg Render
     module_mp4 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     render_single_module_video(img_path, audio_path, module_mp4)
 
-    # Clean up intermediate files
+    # Temporary Files Cleanup
     for f in [img_path, audio_path]:
         if os.path.exists(f):
             os.remove(f)
 
     return module_mp4
 
-# --- STREAMLIT UI ---
+# --- STREAMLIT USER INTERFACE ---
 st.title("⚡ Ultra-Fast AI Whiteboard Lecture Generator")
 
 uploaded_file = st.file_uploader("Upload Document (PDF or DOCX)", type=["pdf", "docx"])
 
 if uploaded_file:
     if st.button("Generate Complete Lecture"):
-        with st.spinner("Extracting text content..."):
-            if uploaded_file.name.endswith(".pdf"):
-                extracted_text = extract_text_from_pdf(uploaded_file)
+        try:
+            with st.spinner("Extracting text content..."):
+                if uploaded_file.name.endswith(".pdf"):
+                    extracted_text = extract_text_from_pdf(uploaded_file)
+                else:
+                    extracted_text = extract_text_from_docx(uploaded_file)
+
+            chunks = chunk_text_by_paragraphs(extracted_text, max_chars_per_chunk=4000)
+            total_chunks = len(chunks)
+            st.success(f"Document segmented into {total_chunks} module(s).")
+
+            prog = st.progress(0)
+            status_text = st.empty()
+
+            # Concurrent Module Processing
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                future_to_idx = {
+                    executor.submit(process_module, idx, chunk, total_chunks): idx 
+                    for idx, chunk in enumerate(chunks)
+                }
+                
+                completed_count = 0
+                results = [None] * total_chunks
+
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        mp4_path = future.result()
+                        results[idx] = mp4_path
+                        completed_count += 1
+                        prog.progress(completed_count / total_chunks)
+                        status_text.text(f"Completed Module {completed_count}/{total_chunks}...")
+                    except Exception as e:
+                        st.error(f"Error processing Module {idx + 1}: {e}")
+
+            # Stream Concatenation
+            module_mp4s = [r for r in results if r is not None]
+
+            if len(module_mp4s) == total_chunks and total_chunks > 0:
+                status_text.text("Merging video streams...")
+                final_output = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                
+                concatenate_videos_fast(module_mp4s, final_output)
+
+                st.success("Lecture video generated successfully!")
+                st.video(final_output)
+
+                # Final Cleanup
+                for f in module_mp4s:
+                    if os.path.exists(f):
+                        os.remove(f)
             else:
-                extracted_text = extract_text_from_docx(uploaded_file)
+                st.error("One or more modules failed to process. Video generation aborted.")
 
-        if not extracted_text.strip():
-            st.error("No text could be extracted.")
-            st.stop()
-
-        chunks = chunk_text_by_paragraphs(extracted_text, max_chars_per_chunk=4000)
-        total_chunks = len(chunks)
-        st.success(f"Document chunked into {total_chunks} modules.")
-
-        module_mp4s = []
-        prog = st.progress(0)
-        status_text = st.empty()
-
-        # Concurrent processing of modules (Script + TTS + FFmpeg Render)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            future_to_idx = {
-                executor.submit(process_module, idx, chunk, total_chunks): idx 
-                for idx, chunk in enumerate(chunks)
-            }
-            
-            completed_count = 0
-            results = [None] * total_chunks
-
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    mp4_path = future.result()
-                    results[idx] = mp4_path
-                    completed_count += 1
-                    prog.progress(completed_count / total_chunks)
-                    status_text.text(f"Completed Module {completed_count}/{total_chunks}...")
-                except Exception as e:
-                    st.error(f"Error processing module {idx+1}: {e}")
-
-        # Filter out failed tasks
-        module_mp4s = [r for r in results if r is not None]
-
-        if module_mp4s:
-            status_text.text("Merging video streams into final lecture...")
-            final_output = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            
-            # Instant FFmpeg Concatenation
-            concatenate_videos_fast(module_mp4s, final_output)
-
-            st.success("Lecture video generated successfully!")
-            st.video(final_output)
-
-            # Cleanup temporary MP4 clips
-            for f in module_mp4s:
-                if os.path.exists(f):
-                    os.remove(f)
+        except Exception as main_err:
+            st.error(f"Processing Error: {main_err}")
