@@ -53,7 +53,7 @@ def extract_text_from_file(uploaded_file):
 
 
 def get_script(text):
-    """Generates a 3-scene concise video script using valid Gemini model endpoints."""
+    """Dynamically finds available Gemini models and generates a concise video script."""
     prompt = (
         "You are a video producer. Read the following text and summarize key insights into "
         "a concise video script with EXACTLY 3 short scenes. Separate each scene clearly with "
@@ -61,15 +61,24 @@ def get_script(text):
         f"Document Content:\n{text}"
     )
     
-    # Active and supported Gemini models in order of priority
-    candidate_models = [
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-pro"
-    ]
-    
     last_error = None
-    for model_name in candidate_models:
+    
+    try:
+        # Dynamically fetch models supported for content generation on your API key
+        available_models = [
+            m.name for m in genai.list_models() 
+            if 'generateContent' in m.supported_generation_methods
+        ]
+    except Exception as list_err:
+        available_models = []
+        last_error = list_err
+
+    # Fallback default names if list_models() fails or is empty
+    if not available_models:
+        available_models = ["models/gemini-1.5-flash-latest", "models/gemini-1.5-pro-latest", "gemini-1.5-flash"]
+
+    # Try each available model endpoint dynamically
+    for model_name in available_models:
         try:
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
@@ -80,7 +89,6 @@ def get_script(text):
             continue
             
     raise Exception(f"All model endpoints failed. Last error: {last_error}")
-
 
 async def generate_audio_edge_tts(text, output_path):
     """Generates MP3 audio file from text using edge-tts."""
